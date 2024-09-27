@@ -5,6 +5,6 @@ const router = express.Router();
 const deviceController = require('../controllers/deviceController');
 
 // Ruta para establecer el setPoint
-router.post('/setSetPoint', deviceController.setSetPoint);
+router.post('/setPoint', deviceController.setSetPoint);
 
 module.exports = router;
