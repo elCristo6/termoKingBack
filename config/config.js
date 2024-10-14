@@ -4,7 +4,7 @@ const path = require('path');
 
 module.exports = {
   server: {
-    port: process.env.PORT || 3000,
+    port: process.env.PORT || 3002,
   },
   awsIoT: {
     keyPath: path.resolve(__dirname, '../certs/AWSClientPrivateKey.pem.key'),
