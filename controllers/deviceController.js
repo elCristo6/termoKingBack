@@ -1,200 +1,205 @@
-/*
+
 // lib/controllers/deviceController.js
 
 const DeviceData = require('../models/deviceData');
 const WebSocket = require('ws');
 const config = require('../config/config');
-const jwt = require('jsonwebtoken');
 const User = require('../models/user');
 const { authenticateWS } = require('../middleware/wsAuthMiddleware');
 
-// Mapa para asociar userId con WebSocket
 const userSockets = new Map();
-
-class DeviceController {
-  constructor() {
-    this.wss = null;
-    this.device = null;
-    // Enlazar métodos al contexto de la instancia
-    this.processMessage = this.processMessage.bind(this);
-    this.setSetPoint = this.setSetPoint.bind(this);
-  }
-
-  initialize(wss, device) {
-    this.wss = wss;
-    this.device = device;
-
-    // Manejar nuevas conexiones WebSocket
-    this.wss.on('connection', async (ws, req) => {
-      try {
-        // Autenticar la conexión WebSocket
-        const userId = await authenticateWS(ws, req);
-
-        // Asociar el userId con la conexión WebSocket
-        if (userSockets.has(userId)) {
-          // Opcional: Manejar múltiples conexiones por usuario si es necesario
-          console.log(`El usuario ${userId} ya tiene una conexión activa.`);
-          // Puedes decidir cerrar la nueva conexión o permitir múltiples conexiones
-          // Por ahora, permitiremos múltiples conexiones
-        }
-
-        userSockets.set(userId, ws);
-        console.log(`Cliente autenticado: ${userId}`);
-
-        // Enviar mensaje de bienvenida al cliente
-        ws.send(JSON.stringify({ message: 'Conexión WebSocket exitosa.' }));
-
-        // Manejar mensajes entrantes del cliente (si es necesario)
-        ws.on('message', (message) => {
-          console.log(`Mensaje recibido de ${ws.userId}: ${message}`);
-          // Implementar lógica si se espera recibir mensajes del cliente
-        });
-
-        // Manejar el cierre de la conexión
-        ws.on('close', () => {
-          if (ws.userId) {
-            userSockets.delete(ws.userId);
-            console.log(`Conexión WebSocket cerrada para ${ws.userId}`);
-          }
-        });
-      } catch (error) {
-        console.error('Error en la autenticación WebSocket:', error);
-        ws.close();
-      }
-    });
-  }
-
-  processMessage(message) {
-    try {
-      const data = JSON.parse(message.toString());
-      const deviceData = new DeviceData(data);
-
-      console.log('Datos del Dispositivo Recibidos:', deviceData);
-
-      // Verificar que el data tenga un userId
-      const targetUserId = deviceData.userId;
-
-      if (!targetUserId) {
-        console.error('No se proporcionó userId en los datos del dispositivo.');
-        return;
-      }
-
-      // Obtener la conexión WebSocket correspondiente al userId
-      const client = userSockets.get(targetUserId);
-
-      if (client && client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify(deviceData));
-        console.log(`Datos enviados al usuario: ${targetUserId}`);
-      } else {
-        console.warn(`No hay conexión WebSocket abierta para el usuario: ${targetUserId}`);
-      }
-    } catch (error) {
-      console.error('Error al procesar el mensaje:', error);
-    }
-  }
-
-  // Método para establecer el setPoint
-  setSetPoint(req, res) {
-    const { setPoint } = req.body;
-
-    if (!setPoint) {
-      return res.status(400).json({ error: 'El campo setPoint es requerido' });
-    }
-
-    const payload = { setPoint };
-
-    // Publicar al tópico configurado
-    this.device.publish(
-      config.mqttTopics.setPoint,
-      JSON.stringify(payload),
-      (err) => {
-        if (err) {
-          console.error('Error al publicar el setPoint:', err);
-          return res.status(500).json({ error: 'Error al publicar el setPoint' });
-        }
-
-        console.log(`setPoint publicado: ${JSON.stringify(payload)}`);
-        res.json({ message: 'setPoint enviado correctamente', payload });
-      }
-    );
-  }
-}
-
-module.exports = new DeviceController(); // Exportamos una instancia del controlador
-*/
-// lib/controllers/deviceController.js
-
-const DeviceData = require('../models/deviceData');
-const WebSocket = require('ws');
-const config = require('../config/config');
-const jwt = require('jsonwebtoken');
-const User = require('../models/user'); // Asegúrate de importar el modelo de usuario
-const { authenticateWS } = require('../middleware/wsAuthMiddleware');
-
-// Mapa para asociar userId con WebSocket
-const userSockets = new Map();
+const deviceStatus = new Map(); // Almacenar el estado de cada dispositivo y la última vez que envió datos
 
 class DeviceController {
     constructor() {
         this.wss = null;
         this.device = null;
-        // Enlazar métodos al contexto de la instancia
+
         this.processMessage = this.processMessage.bind(this);
         this.setSetPoint = this.setSetPoint.bind(this);
+        this.handleMQTTMessage = this.handleMQTTMessage.bind(this);
+        this.subscribeToDeviceTopics = this.subscribeToDeviceTopics.bind(this);
+        this.checkDeviceInactivity = this.checkDeviceInactivity.bind(this);
+        this.getActiveDevices = this.getActiveDevices.bind(this);
     }
+
+    // Nuevo método para devolver dispositivos activos
+   
+   
+
+getActiveDevices(req, res) {
+    const activeDevices = [];
+
+    deviceStatus.forEach((statusInfo, connectionKey) => {
+        // Verificar que connectionKey exista y esté en el formato esperado "userId-deviceId"
+        if (connectionKey && typeof connectionKey === 'string' && connectionKey.includes('-')) {
+            const parts = connectionKey.split('-');
+            if (parts.length === 2 && statusInfo.status === 'active') {
+                const [userId, deviceId] = parts;
+                activeDevices.push({ userId, deviceId });
+            }
+        }
+    });
+
+    res.json({ activeDevices });
+}
+
 
     initialize(wss, device) {
         this.wss = wss;
         this.device = device;
-
+    
         // Manejar nuevas conexiones WebSocket
         this.wss.on('connection', async (ws, req) => {
             try {
-                // Autenticar la conexión WebSocket
                 const userId = await authenticateWS(ws, req);
+                const urlParams = new URLSearchParams(req.url.replace('/', ''));
+                const deviceId = urlParams.get('deviceID');
 
-                // Asociar el userId con la conexión WebSocket
-                if (userSockets.has(userId)) {
-                    // Opcional: Manejar múltiples conexiones por usuario si es necesario
-                    console.log(`El usuario ${userId} ya tiene una conexión activa.`);
-                    // Puedes decidir cerrar la nueva conexión o permitir múltiples conexiones
-                    // Por ahora, permitiremos múltiples conexiones
+                if (!deviceId) {
+                    ws.send(JSON.stringify({ error: 'DeviceID es requerido.' }));
+                    ws.close();
+                    return;
                 }
 
-                userSockets.set(userId, ws);
-                console.log(`Cliente autenticado: ${userId}`);
+                const connectionKey = `${userId}-${deviceId}`;
+                
+                // Guardar la conexión WebSocket y marcar como "activo"
+                userSockets.set(connectionKey, ws);
+                deviceStatus.set(connectionKey, { status: 'active', lastMessage: Date.now() });
 
-                // Enviar mensaje de bienvenida al cliente
-                ws.send(JSON.stringify({ message: 'Conexión WebSocket exitosa.' }));
+                console.log(`Cliente conectado: ${userId} con deviceId: ${deviceId}`);
 
-                // Manejar mensajes entrantes del cliente (si es necesario)
+                // Suscribirse a los tópicos de MQTT para este deviceID
+                this.subscribeToDeviceTopics(deviceId);
+
+                // Enviar mensaje de bienvenida y estado actual
+                ws.send(JSON.stringify({
+                    message: 'Conexión WebSocket exitosa.',
+                    userId: userId,
+                    deviceId: deviceId,
+                    status: 'active'
+                }));
+
+                // Temporizador para verificar la inactividad del dispositivo
+                this.checkDeviceInactivity(connectionKey, ws);
+
+                // Manejar mensajes entrantes
                 ws.on('message', (message) => {
-                    console.log(`Mensaje recibido de ${ws.userId}: ${message}`);
-                    // Implementar lógica si se espera recibir mensajes del cliente
+                    console.log(`Mensaje recibido de ${connectionKey}: ${message}`);
                 });
 
                 // Manejar el cierre de la conexión
                 ws.on('close', () => {
-                    if (ws.userId) {
-                        userSockets.delete(ws.userId);
-                        console.log(`Conexión WebSocket cerrada para ${ws.userId}`);
-                    }
+                    userSockets.delete(connectionKey);
+                    deviceStatus.set(connectionKey, { status: 'inactive', lastMessage: Date.now() });
+                    console.log(`Conexión WebSocket cerrada para ${connectionKey}`);
                 });
             } catch (error) {
                 console.error('Error en la autenticación WebSocket:', error);
                 ws.close();
             }
         });
+
+        // Manejo de mensajes de MQTT (vinculado al dispositivo)
+        this.device.on('message', (topic, payload) => {
+            this.handleMQTTMessage(topic, payload);
+        });
     }
 
-    async processMessage(message) {
+    // Método para suscribirse a los tópicos específicos de un dispositivo
+    subscribeToDeviceTopics(deviceID) {
+        const dataTopic = config.mqttTopics.dataReceived(deviceID);
+        const setPointTopic = config.mqttTopics.setPoint(deviceID);
+
+        // Suscribirse a los tópicos específicos del deviceID
+        this.device.subscribe(dataTopic, (err) => {
+            if (err) {
+                console.error(`Error al suscribirse al tópico ${dataTopic}:`, err);
+            } else {
+                console.log(`Suscrito al tópico ${dataTopic}`);
+            }
+        });
+
+        this.device.subscribe(setPointTopic, (err) => {
+            if (err) {
+                console.error(`Error al suscribirse al tópico ${setPointTopic}:`, err);
+            } else {
+                console.log(`Suscrito al tópico ${setPointTopic}`);
+            }
+        });
+    }
+
+async handleMQTTMessage(topic, payload) {
+    try {
+        const data = JSON.parse(payload.toString());
+        const deviceData = new DeviceData(data);
+        const deviceId = deviceData.deviceID;
+
+        if (!deviceId) {
+            console.error('No se proporcionó deviceID en los datos del dispositivo.');
+            return;
+        }
+
+        // Buscar el usuario asociado al deviceID
+        const user = await User.findOne({ deviceId: deviceId });
+        if (!user) {
+            console.error(`No se encontró usuario para deviceID: ${deviceId}`);
+            return;
+        }
+
+        const userId = user.userId;
+        const connectionKey = `${userId}-${deviceId}`;
+
+        // Actualizar el estado del dispositivo como activo y el tiempo del último mensaje
+        deviceStatus.set(connectionKey, { status: 'active', lastMessage: Date.now() });
+
+        // Enviar datos al cliente WebSocket si está activo
+        const client = userSockets.get(connectionKey);
+        if (client && client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({
+                ...data,
+                userId: userId,
+                status: 'active'
+            }));
+            console.log(`Datos enviados al cliente WebSocket para usuario ${userId}`);
+        }
+
+        // Solo imprimir en consola si el dispositivo está activo
+        console.log(`Dispositivo Activo: ${deviceId} (Usuario: ${userId})`);
+        console.log("Datos MQTT recibidos:", data);
+        
+    } catch (error) {
+        console.error('Error al procesar el mensaje MQTT:', error);
+    }
+}
+
+checkDeviceInactivity(connectionKey, ws) {
+    setInterval(() => {
+        const statusInfo = deviceStatus.get(connectionKey);
+        if (statusInfo && Date.now() - statusInfo.lastMessage > 10000) { // 10 segundos sin mensajes MQTT
+            if (statusInfo.status === 'active') {
+                // Cambiar a inactivo solo si estaba activo antes
+                statusInfo.status = 'inactive';
+                console.log(`El dispositivo ${connectionKey} está inactivo.`);
+                
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        deviceId: connectionKey.split('-')[1],
+                        status: 'inactive'
+                    }));
+                }
+            }
+        }
+    }, 3000); // Verificar cada 5 segundos
+}
+
+
+    // Método para procesar mensajes WebSocket (sin cambiar mucho de tu lógica actual)
+    async processMessage(message, connectionKey) {
         try {
             const data = JSON.parse(message.toString());
             const deviceData = new DeviceData(data);
-
-            console.log('Datos del Dispositivo Recibidos:', deviceData);
-
-            // Verificar que el data tenga un deviceID
             const deviceId = deviceData.deviceID;
 
             if (!deviceId) {
@@ -202,30 +207,24 @@ class DeviceController {
                 return;
             }
 
+            // Actualizar la última vez que se recibió un mensaje de este dispositivo
+            deviceStatus.set(connectionKey, { status: 'active', lastMessage: Date.now() });
+
             // Buscar el usuario asociado al deviceID
             const user = await User.findOne({ deviceId: deviceId });
-
             if (!user) {
                 console.error(`No se encontró usuario para deviceID: ${deviceId}`);
                 return;
             }
 
             const userId = user.userId;
+            const dataWithUserId = { ...data, userId: userId, status: 'active' };
 
-            // Añadir userId a los datos
-            const dataWithUserId = {
-                ...data,
-                userId: userId
-            };
-
-            // Obtener la conexión WebSocket correspondiente al userId
-            const client = userSockets.get(userId);
-
+            // Enviar los datos al cliente WebSocket
+            const client = userSockets.get(connectionKey);
             if (client && client.readyState === WebSocket.OPEN) {
                 client.send(JSON.stringify(dataWithUserId));
                 console.log(`Datos enviados al usuario: ${userId}`);
-            } else {
-                console.warn(`No hay conexión WebSocket abierta para el usuario: ${userId}`);
             }
         } catch (error) {
             console.error('Error al procesar el mensaje:', error);
@@ -234,29 +233,23 @@ class DeviceController {
 
     // Método para establecer el setPoint
     setSetPoint(req, res) {
-        const { setPoint } = req.body;
-
-        if (!setPoint) {
-            return res.status(400).json({ error: 'El campo setPoint es requerido' });
+        const { setPoint, deviceID } = req.body;
+        if (!setPoint || !deviceID) {
+            return res.status(400).json({ error: 'El campo setPoint y deviceID son requeridos' });
         }
 
         const payload = { setPoint };
+        const setPointTopic = config.mqttTopics.setPoint(deviceID);
 
-        // Publicar al tópico configurado
-        this.device.publish(
-            config.mqttTopics.setPoint,
-            JSON.stringify(payload),
-            (err) => {
-                if (err) {
-                    console.error('Error al publicar el setPoint:', err);
-                    return res.status(500).json({ error: 'Error al publicar el setPoint' });
-                }
-
-                console.log(`setPoint publicado: ${JSON.stringify(payload)}`);
-                res.json({ message: 'setPoint enviado correctamente', payload });
+        this.device.publish(setPointTopic, JSON.stringify(payload), (err) => {
+            if (err) {
+                console.error('Error al publicar el setPoint:', err);
+                return res.status(500).json({ error: 'Error al publicar el setPoint' });
             }
-        );
+            console.log(`setPoint publicado en ${setPointTopic}: ${JSON.stringify(payload)}`);
+            res.json({ message: 'setPoint enviado correctamente', payload });
+        });
     }
 }
 
-module.exports = new DeviceController(); // Exportamos una instancia del controlador
+module.exports = new DeviceController();
