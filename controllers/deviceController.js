@@ -52,7 +52,8 @@ getActiveDevices(req, res) {
         // Manejar nuevas conexiones WebSocket
         this.wss.on('connection', async (ws, req) => {
             try {
-                const userId = await authenticateWS(ws, req);
+                const user = await authenticateWS(ws, req);
+                const { userId, userType } = user;    
                 const urlParams = new URLSearchParams(req.url.replace('/', ''));
                 const deviceId = urlParams.get('deviceID');
 
@@ -77,6 +78,7 @@ getActiveDevices(req, res) {
                 ws.send(JSON.stringify({
                     message: 'Conexión WebSocket exitosa.',
                     userId: userId,
+                    userType: userType, 
                     deviceId: deviceId,
                     status: 'active'
                 }));

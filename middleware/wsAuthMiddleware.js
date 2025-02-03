@@ -36,8 +36,8 @@ const authenticateWS = async (ws, req) => {
         }
 
         // Asignar el userId al WebSocket
-        ws.userId = user.userId;
-        resolve(user.userId);
+        ws.user = user;
+        resolve(user);
       } catch (error) {
         ws.send(JSON.stringify({ error: 'Error al verificar el usuario.' }));
         reject(error);
